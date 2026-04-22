@@ -144,9 +144,12 @@ PLOTLY_LAYOUT = dict(
     paper_bgcolor=BG,
     font=dict(color=TEXT, family="-apple-system, Segoe UI, Roboto, sans-serif", size=13),
     colorway=PALETTE,
-    xaxis=dict(gridcolor=BORDER, linecolor=BORDER),
-    yaxis=dict(gridcolor=BORDER, linecolor=BORDER),
 )
+
+def style_axes(fig):
+    fig.update_xaxes(gridcolor=BORDER, linecolor=BORDER)
+    fig.update_yaxes(gridcolor=BORDER, linecolor=BORDER)
+    return fig
 
 # ─── DB Connection ────────────────────────────────────────────────────────────
 @st.cache_resource
