@@ -1,21 +1,21 @@
 """
-dashboard.py — Fantasy Football Analytics Dashboard
-=====================================================
+dashboard.py — BDW Fantasy Football Dashboard
+==============================================
+Single-league (Bring Dat Wood) analytics, optimized for clarity.
+
 Run with:
     pip install streamlit plotly pandas
     streamlit run dashboard.py
 
 Views:
-  1. League Standings        — W/L records, scoring trends
-  2. Head-to-Head            — matchup history + starter drill-down
-  3. Waiver Adds             — pickups filterable by position
-  4. Cross-League Comparison — roster overlap across leagues
-  5. Player View             — per-player dashboard
-  6. Owner Analytics         — top scorers per owner, carries
-  7. Trade Analyzer          — retroactive trade ROI
-  8. Power Rankings          — composite PF / win% / recent form
-  9. Luck Index              — actual wins vs. all-play expected wins
- 10. Draft Grades / ROI      — season pts from week-1 roster
+  1. League Standings   — W/L records, weekly trends
+  2. Head-to-Head       — click an opponent to compare vs. selected owner
+  3. Waiver Adds        — pickups filterable by position
+  4. Owner Analytics    — top scorers per owner
+  5. Trade Analyzer     — retroactive trade ROI
+  6. Power Rankings     — composite PF / win% / recent form
+  7. Luck Index         — actual wins vs. all-play expected wins
+  8. Draft Grades / ROI — season pts from earliest-week roster
 """
 
 import json
@@ -29,101 +29,123 @@ import streamlit as st
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "fantasy.db")
-
-# Razorbacks theme
-RZR_RED    = "#9D2232"
-RZR_RED_LT = "#C8102E"
-RZR_BLACK  = "#111111"
-RZR_WHITE  = "#FFFFFF"
-RZR_GRAY   = "#6E6E6E"
-RZR_CREAM  = "#F5F1E8"
-
-RZR_PALETTE = [RZR_RED, RZR_BLACK, RZR_RED_LT, "#7A1A26", RZR_GRAY, "#3D3D3D", "#D4A84B"]
+LEAGUE_NAME = "Bring Dat Wood"
 
 st.set_page_config(
-    page_title="Razorback Fantasy Dashboard",
-    page_icon="🐗",
+    page_title="BDW Dashboard",
+    page_icon="🪵",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─── Razorbacks CSS Theme ────────────────────────────────────────────────────
+# ─── Theme: Light / Dark toggle ──────────────────────────────────────────────
+if "theme" not in st.session_state:
+    st.session_state.theme = "Light"
+
+theme_choice = st.sidebar.radio("Theme", ["Light", "Dark"], horizontal=True,
+                                index=0 if st.session_state.theme == "Light" else 1)
+st.session_state.theme = theme_choice
+DARK = theme_choice == "Dark"
+
+# High-contrast palette, readable typography
+if DARK:
+    BG        = "#0F1116"
+    SURFACE   = "#1A1D25"
+    TEXT      = "#F5F5F5"
+    MUTED     = "#A0A6B1"
+    ACCENT    = "#4FC3F7"   # sky blue, easy on the eyes
+    ACCENT_2  = "#FFB74D"   # amber
+    POSITIVE  = "#66BB6A"
+    NEGATIVE  = "#EF5350"
+    BORDER    = "#2A2F3A"
+else:
+    BG        = "#FFFFFF"
+    SURFACE   = "#F7F8FA"
+    TEXT      = "#1A1A1A"
+    MUTED     = "#5F6B7A"
+    ACCENT    = "#1565C0"
+    ACCENT_2  = "#E65100"
+    POSITIVE  = "#2E7D32"
+    NEGATIVE  = "#C62828"
+    BORDER    = "#DDE2EA"
+
+PALETTE = [ACCENT, ACCENT_2, POSITIVE, NEGATIVE, "#7E57C2", "#26A69A", "#EC407A"]
+
 st.markdown(f"""
 <style>
-    .stApp {{
-        background-color: {RZR_WHITE};
-        color: {RZR_BLACK};
+    html, body, .stApp {{
+        background-color: {BG};
+        color: {TEXT};
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }}
     [data-testid="stSidebar"] {{
-        background-color: {RZR_BLACK};
+        background-color: {SURFACE};
+        border-right: 1px solid {BORDER};
     }}
     [data-testid="stSidebar"] * {{
-        color: {RZR_WHITE} !important;
+        color: {TEXT} !important;
     }}
-    [data-testid="stSidebar"] .stRadio label,
-    [data-testid="stSidebar"] .stSelectbox label,
-    [data-testid="stSidebar"] .stMultiSelect label {{
-        color: {RZR_WHITE} !important;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        font-size: 0.82rem;
+    h1, h2, h3, h4 {{
+        color: {TEXT};
+        font-weight: 700;
+        letter-spacing: -0.01em;
     }}
-    h1, h2, h3 {{
-        color: {RZR_RED};
-        font-family: 'Helvetica Neue', Arial, sans-serif;
-        font-weight: 800;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }}
-    h1 {{
-        border-bottom: 4px solid {RZR_RED};
-        padding-bottom: 0.4rem;
-    }}
+    h1 {{ font-size: 1.9rem; margin-bottom: 0.3rem; }}
+    h2 {{ font-size: 1.35rem; margin-top: 1.2rem; }}
+    h3 {{ font-size: 1.1rem; }}
     [data-testid="stMetric"] {{
-        background-color: {RZR_CREAM};
-        border-left: 5px solid {RZR_RED};
-        padding: 0.7rem 1rem;
-        border-radius: 2px;
+        background-color: {SURFACE};
+        border: 1px solid {BORDER};
+        border-radius: 6px;
+        padding: 0.75rem 1rem;
     }}
     [data-testid="stMetricValue"] {{
-        color: {RZR_RED};
-        font-weight: 800;
-    }}
-    .stDataFrame thead tr th {{
-        background-color: {RZR_RED} !important;
-        color: {RZR_WHITE} !important;
-        font-weight: 700 !important;
-        text-transform: uppercase;
-    }}
-    .stButton button, .stDownloadButton button {{
-        background-color: {RZR_RED};
-        color: {RZR_WHITE};
-        border: none;
-        border-radius: 2px;
+        color: {ACCENT};
         font-weight: 700;
-        text-transform: uppercase;
+        font-size: 1.5rem;
+    }}
+    [data-testid="stMetricLabel"] {{ color: {MUTED}; font-size: 0.85rem; }}
+    .stDataFrame {{ font-size: 0.95rem; }}
+    .stDataFrame thead tr th {{
+        background-color: {SURFACE} !important;
+        color: {TEXT} !important;
+        font-weight: 600 !important;
+        border-bottom: 2px solid {ACCENT} !important;
+    }}
+    .stButton button {{
+        background-color: {SURFACE};
+        color: {TEXT};
+        border: 1px solid {BORDER};
+        border-radius: 6px;
+        font-weight: 600;
+        padding: 0.4rem 0.8rem;
+        width: 100%;
     }}
     .stButton button:hover {{
-        background-color: {RZR_BLACK};
-        color: {RZR_WHITE};
+        background-color: {ACCENT};
+        color: {BG};
+        border-color: {ACCENT};
     }}
-    .stTabs [data-baseweb="tab"] {{
-        font-weight: 700;
-        text-transform: uppercase;
-    }}
+    .stTabs [data-baseweb="tab"] {{ font-weight: 600; }}
     .stTabs [aria-selected="true"] {{
-        color: {RZR_RED} !important;
-        border-bottom: 3px solid {RZR_RED} !important;
+        color: {ACCENT} !important;
+        border-bottom: 3px solid {ACCENT} !important;
+    }}
+    .bdw-opp-active button {{
+        background-color: {ACCENT} !important;
+        color: {BG} !important;
+        border-color: {ACCENT} !important;
     }}
 </style>
 """, unsafe_allow_html=True)
 
 PLOTLY_LAYOUT = dict(
-    plot_bgcolor=RZR_WHITE,
-    paper_bgcolor=RZR_WHITE,
-    font=dict(color=RZR_BLACK, family="Helvetica Neue, Arial, sans-serif"),
-    colorway=RZR_PALETTE,
+    plot_bgcolor=BG,
+    paper_bgcolor=BG,
+    font=dict(color=TEXT, family="-apple-system, Segoe UI, Roboto, sans-serif", size=13),
+    colorway=PALETTE,
+    xaxis=dict(gridcolor=BORDER, linecolor=BORDER),
+    yaxis=dict(gridcolor=BORDER, linecolor=BORDER),
 )
 
 # ─── DB Connection ────────────────────────────────────────────────────────────
@@ -135,22 +157,33 @@ def get_conn():
 
 conn = get_conn()
 
-# ─── Data Loaders ─────────────────────────────────────────────────────────────
+# ─── Data Loaders (filtered to BDW) ───────────────────────────────────────────
 @st.cache_data
-def load_leagues(_conn):
-    return pd.read_sql("SELECT * FROM leagues ORDER BY season", _conn)
+def load_bdw_leagues(_conn):
+    return pd.read_sql(
+        "SELECT * FROM leagues WHERE name = ? ORDER BY season",
+        _conn, params=(LEAGUE_NAME,)
+    )
+
+leagues_df = load_bdw_leagues(conn)
+if leagues_df.empty:
+    st.error(f"No '{LEAGUE_NAME}' data found in fantasy.db.")
+    st.stop()
+
+BDW_IDS = tuple(leagues_df["league_id"].tolist())
+ID_MARKS = ",".join("?" * len(BDW_IDS))
 
 @st.cache_data
 def load_teams(_conn):
-    return pd.read_sql("SELECT * FROM teams", _conn)
+    return pd.read_sql(f"SELECT * FROM teams WHERE league_id IN ({ID_MARKS})", _conn, params=BDW_IDS)
 
 @st.cache_data
 def load_matchups(_conn):
-    return pd.read_sql("SELECT * FROM matchups", _conn)
+    return pd.read_sql(f"SELECT * FROM matchups WHERE league_id IN ({ID_MARKS})", _conn, params=BDW_IDS)
 
 @st.cache_data
 def load_transactions(_conn):
-    return pd.read_sql("SELECT * FROM transactions", _conn)
+    return pd.read_sql(f"SELECT * FROM transactions WHERE league_id IN ({ID_MARKS})", _conn, params=BDW_IDS)
 
 @st.cache_data
 def load_players(_conn):
@@ -161,28 +194,25 @@ def load_player_stats(_conn):
     return pd.read_sql("SELECT * FROM player_stats", _conn)
 
 @st.cache_data
-def load_roster_slots(_conn, season):
+def load_roster_slots_season(_conn, season):
     return pd.read_sql(
-        "SELECT league_id, roster_id, player_id, week, slot FROM roster_slots WHERE season = ?",
-        _conn, params=(season,)
+        f"SELECT league_id, roster_id, player_id, week, slot FROM roster_slots "
+        f"WHERE season = ? AND league_id IN ({ID_MARKS})",
+        _conn, params=(int(season), *BDW_IDS)
     )
 
 @st.cache_data
 def load_all_roster_slots(_conn):
     return pd.read_sql(
-        "SELECT league_id, roster_id, player_id, season, week, slot FROM roster_slots",
-        _conn
+        f"SELECT league_id, roster_id, player_id, season, week, slot FROM roster_slots "
+        f"WHERE league_id IN ({ID_MARKS})",
+        _conn, params=BDW_IDS
     )
 
-leagues_df      = load_leagues(conn)
 teams_df        = load_teams(conn)
 matchups_df     = load_matchups(conn)
 transactions_df = load_transactions(conn)
 players_df      = load_players(conn)
-
-if leagues_df.empty:
-    st.error("No data found in fantasy.db. Run `python run_all.py` first.")
-    st.stop()
 
 def parse_json_list(val):
     try:
@@ -190,7 +220,7 @@ def parse_json_list(val):
     except Exception:
         return []
 
-# ─── W/L Helper ───────────────────────────────────────────────────────────────
+# ─── Records ─────────────────────────────────────────────────────────────────
 @st.cache_data
 def compute_records(_matchups_df, _teams_df, _leagues_df):
     reg = _matchups_df[_matchups_df["is_playoff"] == 0].copy()
@@ -206,14 +236,10 @@ def compute_records(_matchups_df, _teams_df, _leagues_df):
 
     records = (
         paired.groupby(["league_id", "season", "roster_id"])
-        .agg(
-            wins=("win", "sum"),
-            losses=("loss", "sum"),
-            ties=("tie", "sum"),
-            points_for=("points_for", "sum"),
-            points_against=("points_for_opp", "sum"),
-            avg_pts=("points_for", "mean"),
-        )
+        .agg(wins=("win", "sum"), losses=("loss", "sum"), ties=("tie", "sum"),
+             points_for=("points_for", "sum"),
+             points_against=("points_for_opp", "sum"),
+             avg_pts=("points_for", "mean"))
         .reset_index()
     )
     records = records.merge(
@@ -231,7 +257,10 @@ def compute_records(_matchups_df, _teams_df, _leagues_df):
 records_df = compute_records(matchups_df, teams_df, leagues_df)
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
-st.sidebar.markdown(f"<h1 style='color:{RZR_RED};margin-top:0;'>🐗 RAZORBACK<br/>FANTASY</h1>", unsafe_allow_html=True)
+st.sidebar.markdown(f"<h1 style='margin-top:0;color:{ACCENT};font-size:1.5rem;'>🪵 BDW DASHBOARD</h1>",
+                    unsafe_allow_html=True)
+st.sidebar.caption(f"League: **{LEAGUE_NAME}**")
+st.sidebar.markdown("---")
 
 all_owners = sorted(teams_df["owner_name"].dropna().unique())
 my_name = st.sidebar.selectbox("My Team (owner)", all_owners)
@@ -242,8 +271,6 @@ view = st.sidebar.radio(
         "📊 League Standings",
         "⚔️ Head-to-Head",
         "📈 Waiver Adds",
-        "🔀 Cross-League Comparison",
-        "👤 Player View",
         "🏆 Owner Analytics",
         "🔄 Trade Analyzer",
         "⚡ Power Rankings",
@@ -252,146 +279,108 @@ view = st.sidebar.radio(
     ],
 )
 
-# League filter — applies to every view EXCEPT Cross-League Comparison
-st.sidebar.markdown("---")
-league_filter_disabled = view == "🔀 Cross-League Comparison"
-all_league_names = sorted(leagues_df["name"].unique())
-if league_filter_disabled:
-    st.sidebar.caption("League filter N/A for Cross-League view.")
-    filter_leagues = all_league_names
-else:
-    filter_leagues = st.sidebar.multiselect(
-        "Filter by League", all_league_names, default=all_league_names
-    )
-    if not filter_leagues:
-        filter_leagues = all_league_names
-
-filter_league_ids = leagues_df[leagues_df["name"].isin(filter_leagues)]["league_id"].tolist()
-
 st.sidebar.markdown("---")
 st.sidebar.caption(f"DB: {os.path.basename(DB_PATH)}")
 
-def apply_league_filter(df, col="league_id"):
-    if league_filter_disabled:
-        return df
-    return df[df[col].isin(filter_league_ids)]
+SEASONS = sorted(leagues_df["season"].unique().tolist(), reverse=True)
+
+def season_to_league_id(season):
+    row = leagues_df[leagues_df["season"] == season]
+    return row["league_id"].iloc[0] if not row.empty else None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # VIEW 1 — LEAGUE STANDINGS
 # ══════════════════════════════════════════════════════════════════════════════
 if view == "📊 League Standings":
     st.title("League Standings")
-
-    season_options = sorted(leagues_df["season"].unique(), reverse=True)
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        sel_season = st.selectbox("Season", season_options)
-    with col2:
-        season_leagues = leagues_df[
-            (leagues_df["season"] == sel_season)
-            & (leagues_df["league_id"].isin(filter_league_ids))
-        ]
-        if season_leagues.empty:
-            st.warning("No leagues match your filter for this season.")
-            st.stop()
-        league_name_map = dict(zip(season_leagues["name"], season_leagues["league_id"]))
-        sel_league_name = st.selectbox("League", list(league_name_map.keys()))
-    sel_league_id = league_name_map[sel_league_name]
+    sel_season = st.selectbox("Season", SEASONS)
+    sel_league_id = season_to_league_id(sel_season)
 
     df = (
-        records_df[
-            (records_df["season"] == sel_season)
-            & (records_df["league_id"] == sel_league_id)
-        ]
-        .copy()
-        .sort_values("wins", ascending=False)
-        .reset_index(drop=True)
+        records_df[(records_df["season"] == sel_season) & (records_df["league_id"] == sel_league_id)]
+        .copy().sort_values("wins", ascending=False).reset_index(drop=True)
     )
 
     if df.empty:
-        st.warning("No matchup data for this league/season.")
+        st.warning("No matchup data for this season.")
     else:
-        display_df = df[["owner_name", "team_name", "record", "wins", "losses", "points_for", "points_against", "avg_pts"]].copy()
+        display_df = df[["owner_name", "team_name", "record", "wins", "losses",
+                         "points_for", "points_against", "avg_pts"]].copy()
         display_df.columns = ["Owner", "Team", "Record", "W", "L", "PF", "PA", "Avg Pts"]
-        display_df["PF"]      = display_df["PF"].round(1)
-        display_df["PA"]      = display_df["PA"].round(1)
-        display_df["Avg Pts"] = display_df["Avg Pts"].round(1)
+        for c in ["PF", "PA", "Avg Pts"]:
+            display_df[c] = display_df[c].round(1)
         display_df.insert(0, "#", range(1, len(display_df) + 1))
 
         def highlight_me(row):
             if row["Owner"] == my_name:
-                return [f"background-color: {RZR_RED}; color: white"] * len(row)
+                return [f"background-color: {ACCENT}; color: {BG}; font-weight: 600"] * len(row)
             return [""] * len(row)
 
         st.dataframe(display_df.style.apply(highlight_me, axis=1),
                      use_container_width=True, hide_index=True)
 
-        st.subheader(f"Week-by-Week — {sel_league_name} {sel_season}")
+        st.subheader(f"Week-by-Week — {sel_season}")
         my_roster_ids = teams_df[
             (teams_df["league_id"] == sel_league_id) & (teams_df["owner_name"] == my_name)
         ]["roster_id"].tolist()
 
-        reg_matchups = matchups_df[
-            (matchups_df["league_id"] == sel_league_id)
-            & (matchups_df["season"] == sel_season)
-            & (matchups_df["is_playoff"] == 0)
-        ]
+        reg = matchups_df[(matchups_df["league_id"] == sel_league_id)
+                          & (matchups_df["season"] == sel_season)
+                          & (matchups_df["is_playoff"] == 0)]
 
-        if my_roster_ids and not reg_matchups.empty:
-            my_weekly = reg_matchups[reg_matchups["roster_id"].isin(my_roster_ids)].sort_values("week")
-            avg_weekly = reg_matchups.groupby("week")["points_for"].mean().reset_index(name="league_avg")
+        if my_roster_ids and not reg.empty:
+            my_weekly = reg[reg["roster_id"].isin(my_roster_ids)].sort_values("week")
+            avg_weekly = reg.groupby("week")["points_for"].mean().reset_index(name="league_avg")
             chart_df = my_weekly.merge(avg_weekly, on="week", how="left")
+            chart_df["points_for"] = chart_df["points_for"].round(1)
+            chart_df["league_avg"] = chart_df["league_avg"].round(1)
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=chart_df["week"], y=chart_df["points_for"],
-                mode="lines+markers", name="My Score",
-                line=dict(color=RZR_RED, width=3), marker=dict(size=9),
-            ))
-            fig.add_trace(go.Scatter(
-                x=chart_df["week"], y=chart_df["league_avg"],
+            fig.add_trace(go.Scatter(x=chart_df["week"], y=chart_df["points_for"],
+                mode="lines+markers", name=f"{my_name}",
+                line=dict(color=ACCENT, width=3), marker=dict(size=9)))
+            fig.add_trace(go.Scatter(x=chart_df["week"], y=chart_df["league_avg"],
                 mode="lines", name="League Avg",
-                line=dict(color=RZR_BLACK, width=1.5, dash="dash"),
-            ))
+                line=dict(color=MUTED, width=1.5, dash="dash")))
             fig.update_layout(xaxis_title="Week", yaxis_title="Points",
                               legend=dict(orientation="h", y=1.1),
                               height=360, margin=dict(t=10, b=40), **PLOTLY_LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("All-Time Win % by Season")
-        my_all = records_df[
-            (records_df["owner_name"] == my_name)
-            & (records_df["league_id"].isin(filter_league_ids))
-        ].sort_values("season")
-        if not my_all.empty:
-            fig2 = px.bar(
-                my_all, x="season", y="win_pct",
-                color="league_name", barmode="group",
-                text=my_all["record"],
-                labels={"win_pct": "Win %", "season": "Season", "league_name": "League"},
-                color_discrete_sequence=RZR_PALETTE,
-            )
-            fig2.update_traces(textposition="outside")
-            fig2.update_layout(yaxis_tickformat=".0%", height=360,
-                               margin=dict(t=10, b=40), **PLOTLY_LAYOUT)
-            st.plotly_chart(fig2, use_container_width=True)
-
 # ══════════════════════════════════════════════════════════════════════════════
-# VIEW 2 — HEAD-TO-HEAD (with drill-down)
+# VIEW 2 — HEAD-TO-HEAD (button-based opponent selection)
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "⚔️ Head-to-Head":
     st.title("Head-to-Head")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        default_a = all_owners.index(my_name) if my_name in all_owners else 0
-        owner_a = st.selectbox("Team A", all_owners, index=default_a)
-    with col2:
-        others = [o for o in all_owners if o != owner_a]
-        owner_b = st.selectbox("Team B", others)
+    owner_a = my_name
+    st.markdown(f"**Comparing:** `{owner_a}` vs. &mdash; click an opponent:")
 
-    ta = teams_df[(teams_df["owner_name"] == owner_a) & (teams_df["league_id"].isin(filter_league_ids))][["league_id", "roster_id"]].rename(columns={"roster_id": "rid_a"})
-    tb = teams_df[(teams_df["owner_name"] == owner_b) & (teams_df["league_id"].isin(filter_league_ids))][["league_id", "roster_id"]].rename(columns={"roster_id": "rid_b"})
+    # Opponents grid of buttons
+    opponents = [o for o in all_owners if o != owner_a]
+    if "h2h_opp" not in st.session_state or st.session_state.get("h2h_owner_a") != owner_a:
+        st.session_state.h2h_opp = opponents[0] if opponents else None
+        st.session_state.h2h_owner_a = owner_a
+
+    cols_per_row = 6
+    for i in range(0, len(opponents), cols_per_row):
+        cols = st.columns(cols_per_row)
+        for j, opp in enumerate(opponents[i:i+cols_per_row]):
+            with cols[j]:
+                active = opp == st.session_state.h2h_opp
+                label = f"▶ {opp}" if active else opp
+                if st.button(label, key=f"opp_{opp}"):
+                    st.session_state.h2h_opp = opp
+                    st.rerun()
+
+    owner_b = st.session_state.h2h_opp
+    if not owner_b:
+        st.stop()
+
+    st.markdown(f"### {owner_a}  vs.  {owner_b}")
+
+    ta = teams_df[teams_df["owner_name"] == owner_a][["league_id", "roster_id"]].rename(columns={"roster_id": "rid_a"})
+    tb = teams_df[teams_df["owner_name"] == owner_b][["league_id", "roster_id"]].rename(columns={"roster_id": "rid_b"})
     shared = ta.merge(tb, on="league_id")
     reg = matchups_df[matchups_df["is_playoff"] == 0]
 
@@ -410,18 +399,19 @@ elif view == "⚔️ Head-to-Head":
         h2h_rows.append(both)
 
     if not h2h_rows:
-        st.info(f"**{owner_a}** and **{owner_b}** have never faced each other (in filtered leagues).")
+        st.info(f"**{owner_a}** and **{owner_b}** have never faced each other.")
     else:
         h2h = pd.concat(h2h_rows)
-        h2h = h2h.merge(leagues_df[["league_id", "name"]].rename(columns={"name": "League"}), on="league_id")
+        h2h["pts_a"] = h2h["pts_a"].round(1)
+        h2h["pts_b"] = h2h["pts_b"].round(1)
 
         wins_a = (h2h["result"] == "W").sum()
         wins_b = (h2h["result"] == "L").sum()
         ties   = (h2h["result"] == "T").sum()
         m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric(f"{owner_a} W", wins_a)
-        m2.metric(f"{owner_b} W", wins_b)
-        m3.metric("Ties", ties)
+        m1.metric(f"{owner_a} W", int(wins_a))
+        m2.metric(f"{owner_b} W", int(wins_b))
+        m3.metric("Ties", int(ties))
         m4.metric("Games", len(h2h))
         m5.metric(f"{owner_a} Avg", f"{h2h['pts_a'].mean():.1f}")
         m6.metric(f"{owner_b} Avg", f"{h2h['pts_b'].mean():.1f}")
@@ -429,52 +419,48 @@ elif view == "⚔️ Head-to-Head":
         st.markdown("---")
 
         max_val = max(h2h["pts_a"].max(), h2h["pts_b"].max()) + 15
-        fig = px.scatter(
-            h2h, x="pts_a", y="pts_b", color="result",
-            hover_data=["season", "week", "League"],
-            labels={"pts_a": f"{owner_a}", "pts_b": f"{owner_b}", "result": "Result"},
-            color_discrete_map={"W": RZR_RED, "L": RZR_BLACK, "T": RZR_GRAY},
-            title=f"{owner_a} vs {owner_b}",
-        )
+        fig = px.scatter(h2h, x="pts_a", y="pts_b", color="result",
+            hover_data=["season", "week"],
+            labels={"pts_a": owner_a, "pts_b": owner_b, "result": "Result"},
+            color_discrete_map={"W": POSITIVE, "L": NEGATIVE, "T": MUTED})
         fig.add_shape(type="line", x0=0, y0=0, x1=max_val, y1=max_val,
-                      line=dict(dash="dash", color=RZR_GRAY, width=1))
-        fig.update_layout(height=420, margin=dict(t=40), **PLOTLY_LAYOUT)
+                      line=dict(dash="dash", color=MUTED, width=1))
+        fig.update_layout(height=420, margin=dict(t=30), **PLOTLY_LAYOUT)
         st.plotly_chart(fig, use_container_width=True)
 
-        # ── History table + drill-down ──
-        st.subheader("Matchup History — Click to Drill Into Starters")
+        # History + drill-down
+        st.subheader("Matchup History")
         h2h_sorted = h2h.sort_values(["season", "week"], ascending=[False, True]).reset_index(drop=True)
-        display = h2h_sorted[["season", "week", "League", "pts_a", "pts_b", "result"]].rename(columns={
-            "pts_a": owner_a, "pts_b": owner_b,
-            "result": "Result", "season": "Season", "week": "Week",
+        display = h2h_sorted[["season", "week", "pts_a", "pts_b", "result"]].rename(columns={
+            "pts_a": owner_a, "pts_b": owner_b, "result": "Result",
+            "season": "Season", "week": "Week",
         })
         st.dataframe(display, use_container_width=True, hide_index=True)
 
-        st.markdown("**Drill into a specific matchup:**")
+        st.subheader("Drill Into a Matchup")
         option_labels = [
-            f"{r['season']} W{r['week']} — {r['League']} ({r['pts_a']:.1f} vs {r['pts_b']:.1f})"
+            f"{r['season']} W{r['week']} — {r['pts_a']:.1f} vs {r['pts_b']:.1f}"
             for _, r in h2h_sorted.iterrows()
         ]
         sel_idx = st.selectbox("Matchup", range(len(option_labels)), format_func=lambda i: option_labels[i])
         sel_row = h2h_sorted.iloc[sel_idx]
 
-        slots_df = load_roster_slots(conn, int(sel_row["season"]))
+        slots_df = load_roster_slots_season(conn, int(sel_row["season"]))
         stats_df = load_player_stats(conn)
-        week_stats = stats_df[(stats_df["season"] == int(sel_row["season"])) & (stats_df["week"] == int(sel_row["week"]))]
+        week_stats = stats_df[(stats_df["season"] == int(sel_row["season"]))
+                              & (stats_df["week"] == int(sel_row["week"]))]
 
         def roster_detail(rid, label, pts):
-            rs = slots_df[
-                (slots_df["league_id"] == sel_row["league_id"])
-                & (slots_df["roster_id"] == rid)
-                & (slots_df["week"] == int(sel_row["week"]))
-            ].merge(players_df, on="player_id", how="left").merge(
-                week_stats[["player_id", "pts_ppr"]], on="player_id", how="left"
-            )
+            rs = slots_df[(slots_df["league_id"] == sel_row["league_id"])
+                          & (slots_df["roster_id"] == rid)
+                          & (slots_df["week"] == int(sel_row["week"]))] \
+                .merge(players_df, on="player_id", how="left") \
+                .merge(week_stats[["player_id", "pts_ppr"]], on="player_id", how="left")
             if rs.empty:
                 st.info(f"No roster data for {label}.")
                 return
             rs["Starter"] = ~rs["slot"].str.upper().isin(["BN", "IR", "TAXI"])
-            rs["pts_ppr"] = rs["pts_ppr"].fillna(0).round(2)
+            rs["pts_ppr"] = rs["pts_ppr"].fillna(0).round(1)
             rs = rs.sort_values(["Starter", "pts_ppr"], ascending=[False, False])
             show = rs[["slot", "full_name", "position", "team", "pts_ppr", "Starter"]].rename(columns={
                 "slot": "Slot", "full_name": "Player", "position": "Pos",
@@ -484,13 +470,11 @@ elif view == "⚔️ Head-to-Head":
             st.dataframe(show, use_container_width=True, hide_index=True)
 
         c1, c2 = st.columns(2)
-        with c1:
-            roster_detail(sel_row["rid_a"], owner_a, sel_row["pts_a"])
-        with c2:
-            roster_detail(sel_row["rid_b"], owner_b, sel_row["pts_b"])
+        with c1: roster_detail(sel_row["rid_a"], owner_a, sel_row["pts_a"])
+        with c2: roster_detail(sel_row["rid_b"], owner_b, sel_row["pts_b"])
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VIEW 3 — WAIVER ADDS (position filter)
+# VIEW 3 — WAIVER ADDS
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "📈 Waiver Adds":
     st.title("Best Waiver & Free Agent Adds")
@@ -500,8 +484,7 @@ elif view == "📈 Waiver Adds":
         default_idx = all_owners.index(my_name) if my_name in all_owners else 0
         sel_owner = st.selectbox("Owner", all_owners, index=default_idx)
     with col2:
-        seasons = sorted(leagues_df["season"].unique(), reverse=True)
-        sel_season = st.selectbox("Season", seasons)
+        sel_season = st.selectbox("Season", SEASONS)
     with col3:
         scoring_label = st.selectbox("Scoring", ["PPR", "Half-PPR", "Standard"])
         scoring_col = {"PPR": "pts_ppr", "Half-PPR": "pts_half_ppr", "Standard": "pts_std"}[scoring_label]
@@ -509,21 +492,15 @@ elif view == "📈 Waiver Adds":
         all_positions = ["QB", "RB", "WR", "TE", "K", "DEF"]
         sel_positions = st.multiselect("Positions", all_positions, default=all_positions)
 
-    owner_league_rows = teams_df.merge(leagues_df[["league_id", "season"]], on="league_id")
-    owner_league_rows = owner_league_rows[
-        (owner_league_rows["owner_name"] == sel_owner)
-        & (owner_league_rows["season"] == sel_season)
-        & (owner_league_rows["league_id"].isin(filter_league_ids))
-    ]
+    sel_league_id = season_to_league_id(sel_season)
+    owner_teams = teams_df[(teams_df["owner_name"] == sel_owner) & (teams_df["league_id"] == sel_league_id)]
 
-    if owner_league_rows.empty:
-        st.warning("No leagues found for this owner/season (within filter).")
+    if owner_teams.empty:
+        st.warning("No team found for this owner/season.")
     else:
-        league_ids = owner_league_rows["league_id"].tolist()
-        roster_ids = owner_league_rows["roster_id"].tolist()
-
+        roster_ids = owner_teams["roster_id"].tolist()
         txn = transactions_df[
-            transactions_df["league_id"].isin(league_ids)
+            (transactions_df["league_id"] == sel_league_id)
             & transactions_df["type"].isin(["waiver", "free_agent"])
             & (transactions_df["status"] == "complete")
         ].copy()
@@ -542,20 +519,16 @@ elif view == "📈 Waiver Adds":
             season_stats = (
                 stats_df[stats_df["season"] == sel_season]
                 .groupby("player_id")
-                .agg(
-                    total_pts=(scoring_col, "sum"),
-                    weeks_played=(scoring_col, lambda x: (x > 0).sum()),
-                    avg_pts=(scoring_col, "mean"),
-                )
+                .agg(total_pts=(scoring_col, "sum"),
+                     weeks_played=(scoring_col, lambda x: (x > 0).sum()),
+                     avg_pts=(scoring_col, "mean"))
                 .reset_index()
             )
 
             result = (
-                txn_exp[["player_id", "league_id", "type"]]
-                .drop_duplicates("player_id", keep="first")
+                txn_exp[["player_id", "type"]].drop_duplicates("player_id", keep="first")
                 .merge(players_df[["player_id", "full_name", "position", "team"]], on="player_id", how="left")
                 .merge(season_stats, on="player_id", how="left")
-                .merge(leagues_df[["league_id", "name"]].rename(columns={"name": "League"}), on="league_id", how="left")
                 .dropna(subset=["full_name"])
             )
             result = result[result["position"].isin(sel_positions)].sort_values("total_pts", ascending=False)
@@ -564,18 +537,16 @@ elif view == "📈 Waiver Adds":
                 st.warning("No results match your position filter.")
             else:
                 top15 = result.head(15)
-                fig = px.bar(
-                    top15, x="total_pts", y="full_name", orientation="h",
+                fig = px.bar(top15, x="total_pts", y="full_name", orientation="h",
                     color="position",
                     labels={"total_pts": f"Season ({scoring_label})", "full_name": "Player"},
                     title=f"Top Adds — {sel_owner} {sel_season}",
-                    color_discrete_sequence=RZR_PALETTE,
-                )
+                    color_discrete_sequence=PALETTE)
                 fig.update_layout(yaxis={"categoryorder": "total ascending"},
                                   height=460, margin=dict(t=40, b=20), **PLOTLY_LAYOUT)
                 st.plotly_chart(fig, use_container_width=True)
 
-                table = result[["full_name", "position", "team", "League", "type", "total_pts", "weeks_played", "avg_pts"]].rename(columns={
+                table = result[["full_name", "position", "team", "type", "total_pts", "weeks_played", "avg_pts"]].rename(columns={
                     "full_name": "Player", "position": "Pos", "team": "NFL",
                     "type": "Add Type", "total_pts": "Season Pts",
                     "weeks_played": "Wks", "avg_pts": "Avg/Wk",
@@ -585,201 +556,7 @@ elif view == "📈 Waiver Adds":
                 st.dataframe(table, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VIEW 4 — CROSS-LEAGUE COMPARISON (no league filter)
-# ══════════════════════════════════════════════════════════════════════════════
-elif view == "🔀 Cross-League Comparison":
-    st.title("Cross-League Roster Comparison")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        default_idx = all_owners.index(my_name) if my_name in all_owners else 0
-        sel_owner = st.selectbox("Owner", all_owners, index=default_idx)
-    with col2:
-        seasons = sorted(leagues_df["season"].unique(), reverse=True)
-        sel_season = st.selectbox("Season", seasons)
-    with col3:
-        sel_week = st.number_input("Roster Week", min_value=1, max_value=18, value=1)
-
-    owner_leagues = (
-        teams_df.merge(leagues_df, on="league_id")
-        .query("owner_name == @sel_owner and season == @sel_season")
-    )
-
-    if owner_leagues.empty:
-        st.warning("No leagues found for this owner/season.")
-    else:
-        slots_df = load_roster_slots(conn, int(sel_season))
-        if slots_df.empty:
-            st.warning("No roster slot data for this season.")
-        else:
-            stats_df = load_player_stats(conn)
-            season_stats = (
-                stats_df[stats_df["season"] == sel_season]
-                .groupby("player_id")
-                .agg(season_pts=("pts_ppr", "sum"), avg_pts=("pts_ppr", "mean"))
-                .reset_index()
-            )
-
-            all_rosters = []
-            for _, row in owner_leagues.iterrows():
-                week_slots = slots_df[
-                    (slots_df["league_id"] == row["league_id"])
-                    & (slots_df["roster_id"] == row["roster_id"])
-                    & (slots_df["week"] == sel_week)
-                ].copy()
-                if week_slots.empty:
-                    continue
-                week_slots["league_name"] = row["name"]
-                all_rosters.append(week_slots)
-
-            if not all_rosters:
-                st.info(f"No roster data for week {sel_week}.")
-            else:
-                combined = (
-                    pd.concat(all_rosters)
-                    .merge(players_df, on="player_id", how="left")
-                    .merge(season_stats, on="player_id", how="left")
-                )
-                league_names = combined["league_name"].unique()
-                cols = st.columns(max(1, len(league_names)))
-                for col, lg_name in zip(cols, league_names):
-                    with col:
-                        st.markdown(f"**{lg_name}**")
-                        lg_data = (
-                            combined[combined["league_name"] == lg_name]
-                            [["slot", "full_name", "position", "season_pts", "avg_pts"]]
-                            .rename(columns={"slot": "Slot", "full_name": "Player",
-                                             "position": "Pos", "season_pts": "Szn Pts", "avg_pts": "Avg"})
-                            .sort_values("Slot")
-                        )
-                        lg_data["Szn Pts"] = lg_data["Szn Pts"].round(1)
-                        lg_data["Avg"]     = lg_data["Avg"].round(1)
-                        st.dataframe(lg_data, use_container_width=True, hide_index=True)
-
-                st.markdown("---")
-                st.subheader("Players Rostered in Multiple Leagues")
-                overlap = (
-                    combined.groupby(["player_id", "full_name", "position"])["league_name"]
-                    .apply(list).reset_index()
-                )
-                overlap["# Leagues"] = overlap["league_name"].apply(len)
-                overlap = (
-                    overlap[overlap["# Leagues"] > 1]
-                    .merge(season_stats, on="player_id", how="left")
-                    .sort_values("season_pts", ascending=False)
-                )
-                if overlap.empty:
-                    st.info("No players rostered in more than one league this week.")
-                else:
-                    ot = overlap[["full_name", "position", "# Leagues", "season_pts"]].rename(columns={
-                        "full_name": "Player", "position": "Pos", "season_pts": "Season Pts",
-                    })
-                    ot["Season Pts"] = ot["Season Pts"].round(1)
-                    st.dataframe(ot, use_container_width=True, hide_index=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VIEW 5 — PLAYER VIEW
-# ══════════════════════════════════════════════════════════════════════════════
-elif view == "👤 Player View":
-    st.title("Player Dashboard")
-
-    stats_df = load_player_stats(conn)
-
-    col1, col2 = st.columns([2, 1])
-    with col2:
-        seasons = sorted(stats_df["season"].dropna().unique(), reverse=True)
-        sel_season = st.selectbox("Season", seasons)
-    with col1:
-        pos_filter = st.multiselect("Filter positions", ["QB", "RB", "WR", "TE", "K", "DEF"],
-                                    default=["QB", "RB", "WR", "TE"])
-
-    active_players = players_df[players_df["position"].isin(pos_filter)].copy()
-    active_players["label"] = active_players["full_name"] + " (" + active_players["position"].fillna("") + " — " + active_players["team"].fillna("FA") + ")"
-    active_players = active_players.sort_values("full_name")
-
-    sel_label = st.selectbox("Player", active_players["label"].tolist())
-    sel_player = active_players[active_players["label"] == sel_label].iloc[0]
-    pid = sel_player["player_id"]
-
-    p_stats = stats_df[(stats_df["player_id"] == pid) & (stats_df["season"] == sel_season)].sort_values("week")
-
-    if p_stats.empty:
-        st.warning("No stats for this player in this season.")
-    else:
-        tot_ppr = p_stats["pts_ppr"].sum()
-        avg_ppr = p_stats["pts_ppr"].mean()
-        best    = p_stats["pts_ppr"].max()
-        games   = (p_stats["pts_ppr"] > 0).sum()
-
-        # Position rank
-        pos_totals = (
-            stats_df[stats_df["season"] == sel_season]
-            .merge(players_df[["player_id", "position"]], on="player_id")
-            .groupby(["player_id", "position"])["pts_ppr"].sum().reset_index()
-        )
-        same_pos = pos_totals[pos_totals["position"] == sel_player["position"]].sort_values("pts_ppr", ascending=False).reset_index(drop=True)
-        rank = same_pos.index[same_pos["player_id"] == pid].tolist()
-        pos_rank = rank[0] + 1 if rank else None
-
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Total PPR", f"{tot_ppr:.1f}")
-        m2.metric("Avg / Wk", f"{avg_ppr:.1f}")
-        m3.metric("Best Wk", f"{best:.1f}")
-        m4.metric("Games", int(games))
-        m5.metric(f"{sel_player['position']} Rank", f"#{pos_rank}" if pos_rank else "—")
-
-        st.subheader("Weekly Scoring")
-        fig = px.bar(p_stats, x="week", y="pts_ppr",
-                     labels={"week": "Week", "pts_ppr": "PPR Pts"},
-                     color_discrete_sequence=[RZR_RED])
-        fig.update_layout(height=340, margin=dict(t=10, b=40), **PLOTLY_LAYOUT)
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Season-over-season
-        all_p_seasons = (
-            stats_df[stats_df["player_id"] == pid]
-            .groupby("season").agg(total=("pts_ppr", "sum"), avg=("pts_ppr", "mean"), games=("pts_ppr", lambda x: (x > 0).sum()))
-            .reset_index().sort_values("season")
-        )
-        if len(all_p_seasons) > 1:
-            st.subheader("Season-Over-Season")
-            fig2 = px.bar(all_p_seasons, x="season", y="total",
-                          labels={"season": "Season", "total": "Total PPR"},
-                          color_discrete_sequence=[RZR_BLACK])
-            fig2.update_layout(height=300, margin=dict(t=10, b=40), **PLOTLY_LAYOUT)
-            st.plotly_chart(fig2, use_container_width=True)
-
-        # Stat lines
-        st.subheader("Weekly Stat Lines")
-        stat_cols = ["week", "pts_ppr", "pts_half_ppr", "pts_std",
-                     "pass_yd", "pass_td", "rush_yd", "rush_td",
-                     "rec", "rec_yd", "rec_td", "targets"]
-        show = p_stats[[c for c in stat_cols if c in p_stats.columns]].rename(columns={
-            "week": "Wk", "pts_ppr": "PPR", "pts_half_ppr": "Half", "pts_std": "Std",
-            "pass_yd": "PaYd", "pass_td": "PaTD", "rush_yd": "RuYd", "rush_td": "RuTD",
-            "rec": "Rec", "rec_yd": "ReYd", "rec_td": "ReTD", "targets": "Tgt",
-        }).round(1)
-        st.dataframe(show, use_container_width=True, hide_index=True)
-
-        # Rostered by (within filter)
-        st.subheader("Rostered in Your Leagues")
-        all_slots = load_all_roster_slots(conn)
-        rostered = all_slots[
-            (all_slots["player_id"] == pid)
-            & (all_slots["season"] == sel_season)
-            & (all_slots["league_id"].isin(filter_league_ids))
-        ].merge(teams_df[["league_id", "roster_id", "owner_name"]], on=["league_id", "roster_id"], how="left") \
-         .merge(leagues_df[["league_id", "name"]].rename(columns={"name": "League"}), on="league_id", how="left")
-        if rostered.empty:
-            st.info("Not rostered in any filtered league this season.")
-        else:
-            summary = rostered.groupby(["League", "owner_name"])["week"].agg(["min", "max", "count"]).reset_index().rename(columns={
-                "owner_name": "Owner", "min": "First Wk", "max": "Last Wk", "count": "Weeks",
-            })
-            st.dataframe(summary, use_container_width=True, hide_index=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VIEW 6 — OWNER ANALYTICS (top scorers per owner)
+# VIEW 4 — OWNER ANALYTICS
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "🏆 Owner Analytics":
     st.title("Owner Analytics — Top Contributors")
@@ -789,16 +566,15 @@ elif view == "🏆 Owner Analytics":
         default_idx = all_owners.index(my_name) if my_name in all_owners else 0
         sel_owner = st.selectbox("Owner", all_owners, index=default_idx)
     with col2:
-        seasons = ["All-Time"] + sorted(leagues_df["season"].unique().tolist(), reverse=True)
-        sel_season = st.selectbox("Season", seasons)
+        sel_season = st.selectbox("Season", ["All-Time"] + SEASONS)
 
     owner_rows = teams_df.merge(leagues_df[["league_id", "season"]], on="league_id")
-    owner_rows = owner_rows[(owner_rows["owner_name"] == sel_owner) & (owner_rows["league_id"].isin(filter_league_ids))]
+    owner_rows = owner_rows[owner_rows["owner_name"] == sel_owner]
     if sel_season != "All-Time":
         owner_rows = owner_rows[owner_rows["season"] == sel_season]
 
     if owner_rows.empty:
-        st.warning("No teams found for this owner/season (within filter).")
+        st.warning("No teams found for this owner/season.")
     else:
         slots_all = load_all_roster_slots(conn)
         stats_df = load_player_stats(conn)
@@ -807,7 +583,6 @@ elif view == "🏆 Owner Analytics":
         owner_slots = slots_all.merge(owner_rows[merge_keys].drop_duplicates(), on=merge_keys, how="inner")
         owner_slots["is_starter"] = ~owner_slots["slot"].str.upper().isin(["BN", "IR", "TAXI"])
 
-        # join weekly points
         owner_slots = owner_slots.merge(
             stats_df[["player_id", "season", "week", "pts_ppr"]],
             on=["player_id", "season", "week"], how="left",
@@ -834,7 +609,7 @@ elif view == "🏆 Owner Analytics":
         top = agg.head(20)
         fig = px.bar(top, x="total_pts", y="full_name", orientation="h", color="position",
                      labels={"total_pts": "PPR Pts", "full_name": "Player"},
-                     color_discrete_sequence=RZR_PALETTE)
+                     color_discrete_sequence=PALETTE)
         fig.update_layout(yaxis={"categoryorder": "total ascending"},
                           height=540, margin=dict(t=20, b=20), **PLOTLY_LAYOUT)
         st.plotly_chart(fig, use_container_width=True)
@@ -842,13 +617,12 @@ elif view == "🏆 Owner Analytics":
         tbl = agg.rename(columns={"full_name": "Player", "position": "Pos",
                                   "total_pts": "Pts", "starts": "Starts", "avg_pts": "Avg"})
         tbl["Pts"] = tbl["Pts"].round(1)
-        tbl["Avg"] = tbl["Avg"].round(2)
+        tbl["Avg"] = tbl["Avg"].round(1)
         st.dataframe(tbl.drop(columns=["player_id"]), use_container_width=True, hide_index=True)
 
         # All-owner leaderboard
-        st.subheader("All-Owner Leaderboard (Single Player Contribution)")
+        st.subheader("League Leaderboard — Top Single-Player Contributions")
         all_starters = slots_all.copy()
-        all_starters = all_starters[all_starters["league_id"].isin(filter_league_ids)]
         if sel_season != "All-Time":
             all_starters = all_starters[all_starters["season"] == sel_season]
         all_starters["is_starter"] = ~all_starters["slot"].str.upper().isin(["BN", "IR", "TAXI"])
@@ -869,54 +643,30 @@ elif view == "🏆 Owner Analytics":
         st.dataframe(leaderboard, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VIEW 7 — TRADE ANALYZER
+# VIEW 5 — TRADE ANALYZER
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "🔄 Trade Analyzer":
     st.title("Trade Analyzer — Retroactive ROI")
-    st.caption("Compares PPR points scored by each side AFTER the trade date, for the rest of that season.")
+    st.caption("PPR points each side scored from the players landing on their roster after the trade, for the rest of that season.")
 
-    seasons = sorted(leagues_df["season"].unique(), reverse=True)
-    sel_season = st.selectbox("Season", seasons)
-
-    season_leagues = leagues_df[
-        (leagues_df["season"] == sel_season) & (leagues_df["league_id"].isin(filter_league_ids))
-    ]
-    if season_leagues.empty:
-        st.warning("No leagues match filter for this season.")
-        st.stop()
+    sel_season = st.selectbox("Season", SEASONS)
+    sel_league_id = season_to_league_id(sel_season)
 
     trades = transactions_df[
-        transactions_df["league_id"].isin(season_leagues["league_id"])
+        (transactions_df["league_id"] == sel_league_id)
         & (transactions_df["type"] == "trade")
         & (transactions_df["status"] == "complete")
     ].copy()
 
     if trades.empty:
-        st.info("No completed trades in these leagues this season.")
+        st.info("No completed trades this season.")
     else:
         trades["roster_ids_list"] = trades["roster_ids"].apply(parse_json_list)
         trades["player_ids_list"] = trades["player_ids"].apply(parse_json_list)
 
-        # Need a "trade week" — estimate from transaction created timestamp → week
-        # Simpler proxy: count from first matchup week to last; use transactions.created relative to season
-        # Sleeper trades include adds/drops structure we don't have columns for, so we split players
-        # across roster sides using position order: fall back to half-half if unknown.
-        # We don't have adds/drops breakdown in schema, so evaluate trade as "did this team add good players overall?"
-        # Approach: for each trade, for each roster_id, find players they had AFTER via roster_slots (earliest week after trade)
-
         stats_df = load_player_stats(conn)
         slots_all = load_all_roster_slots(conn)
         season_slots = slots_all[slots_all["season"] == sel_season]
-
-        # figure out trade's week: find first week where roster_slots differ for involved rosters
-        # simpler: use created epoch → week map
-        season_weeks = sorted(matchups_df[matchups_df["season"] == sel_season]["week"].unique())
-        min_week, max_week = (min(season_weeks), max(season_weeks)) if season_weeks else (1, 17)
-
-        # For each trade, use created timestamp to assign week
-        # Map seconds-per-week: rough approximation
-        if not trades.empty:
-            trades["created"] = pd.to_numeric(trades["created"], errors="coerce")
 
         rows = []
         for _, trade in trades.iterrows():
@@ -926,12 +676,10 @@ elif view == "🔄 Trade Analyzer":
             if len(rids) < 2 or not pids:
                 continue
 
-            # Determine trade week: which is the first week where rosters contain these players on these rids?
             lg_slots = season_slots[(season_slots["league_id"] == lg) & (season_slots["player_id"].isin(pids))]
             if lg_slots.empty:
                 continue
 
-            # For each roster side, identify which players landed on it post-trade
             side_rows = {}
             for rid in rids:
                 post = lg_slots[lg_slots["roster_id"] == rid]
@@ -939,28 +687,20 @@ elif view == "🔄 Trade Analyzer":
                     continue
                 landing_pids = post["player_id"].unique().tolist()
                 landing_week = int(post["week"].min())
-                # points from landing_week onward for these players while on this roster
                 pts = 0.0
                 for pid in landing_pids:
                     weeks_on = post[post["player_id"] == pid]["week"].unique().tolist()
-                    p_pts = stats_df[
-                        (stats_df["player_id"] == pid)
-                        & (stats_df["season"] == sel_season)
-                        & (stats_df["week"].isin(weeks_on))
-                    ]["pts_ppr"].sum()
+                    p_pts = stats_df[(stats_df["player_id"] == pid)
+                                     & (stats_df["season"] == sel_season)
+                                     & (stats_df["week"].isin(weeks_on))]["pts_ppr"].sum()
                     pts += p_pts
-                side_rows[rid] = {
-                    "players": landing_pids,
-                    "week": landing_week,
-                    "pts_after": pts,
-                }
+                side_rows[rid] = {"players": landing_pids, "week": landing_week, "pts_after": pts}
 
             if len(side_rows) < 2:
                 continue
 
             owners = teams_df[(teams_df["league_id"] == lg) & (teams_df["roster_id"].isin(side_rows.keys()))] \
                 [["roster_id", "owner_name"]].set_index("roster_id")["owner_name"].to_dict()
-            lg_name = leagues_df[leagues_df["league_id"] == lg]["name"].iloc[0]
 
             sides = list(side_rows.items())
             for rid, info in sides:
@@ -969,10 +709,9 @@ elif view == "🔄 Trade Analyzer":
                 other_owners = " + ".join(owners.get(r, "?") for r in other)
                 player_names = players_df[players_df["player_id"].isin(info["players"])]["full_name"].tolist()
                 rows.append({
-                    "League": lg_name,
                     "Week": info["week"],
                     "Owner": owners.get(rid, "?"),
-                    "Received Players": ", ".join(player_names) if player_names else "(none)",
+                    "Received": ", ".join(player_names) if player_names else "(none)",
                     "Pts Gained": round(info["pts_after"], 1),
                     "Opponent(s)": other_owners,
                     "Opp Pts": round(other_pts, 1),
@@ -980,12 +719,11 @@ elif view == "🔄 Trade Analyzer":
                 })
 
         if not rows:
-            st.info("Could not reconstruct any trade outcomes from roster slot data.")
+            st.info("Could not reconstruct trade outcomes.")
         else:
-            trade_df = pd.DataFrame(rows).sort_values(["League", "Week", "Owner"])
+            trade_df = pd.DataFrame(rows).sort_values(["Week", "Owner"])
             st.dataframe(trade_df, use_container_width=True, hide_index=True)
 
-            # Winners summary
             st.subheader("Trade Win/Loss Per Owner")
             trade_df["Outcome"] = trade_df["Diff"].apply(lambda d: "Win" if d > 0 else ("Loss" if d < 0 else "Tie"))
             summary = trade_df.groupby("Owner")["Outcome"].value_counts().unstack(fill_value=0).reset_index()
@@ -994,40 +732,29 @@ elif view == "🔄 Trade Analyzer":
                     summary[c] = 0
             summary["Net"] = summary["Win"] - summary["Loss"]
             summary = summary.sort_values("Net", ascending=False)
-            st.dataframe(summary[["Owner", "Win", "Loss", "Tie", "Net"]], use_container_width=True, hide_index=True)
+            st.dataframe(summary[["Owner", "Win", "Loss", "Tie", "Net"]],
+                         use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VIEW 8 — POWER RANKINGS
+# VIEW 6 — POWER RANKINGS
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "⚡ Power Rankings":
     st.title("Power Rankings")
-    st.caption("Composite score: 40% Win%, 40% normalized PF, 20% last-3-week form.")
+    st.caption("Composite: 40% Win%, 40% normalized PF, 20% last-3-week form.")
 
-    season_options = sorted(leagues_df["season"].unique(), reverse=True)
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        sel_season = st.selectbox("Season", season_options)
-    with col2:
-        s_leagues = leagues_df[(leagues_df["season"] == sel_season)
-                               & (leagues_df["league_id"].isin(filter_league_ids))]
-        if s_leagues.empty:
-            st.warning("No leagues match filter.")
-            st.stop()
-        lname_map = dict(zip(s_leagues["name"], s_leagues["league_id"]))
-        sel_lg_name = st.selectbox("League", list(lname_map.keys()))
-    sel_lg = lname_map[sel_lg_name]
+    sel_season = st.selectbox("Season", SEASONS)
+    sel_lg = season_to_league_id(sel_season)
 
-    reg = matchups_df[
-        (matchups_df["league_id"] == sel_lg) & (matchups_df["season"] == sel_season)
-        & (matchups_df["is_playoff"] == 0)
-    ]
+    reg = matchups_df[(matchups_df["league_id"] == sel_lg)
+                      & (matchups_df["season"] == sel_season)
+                      & (matchups_df["is_playoff"] == 0)]
     if reg.empty:
         st.warning("No regular season matchups.")
         st.stop()
 
     recs = records_df[(records_df["league_id"] == sel_lg) & (records_df["season"] == sel_season)].copy()
     max_week = int(reg["week"].max())
-    recent_weeks = [w for w in range(max(1, max_week - 2), max_week + 1)]
+    recent_weeks = list(range(max(1, max_week - 2), max_week + 1))
     recent = reg[reg["week"].isin(recent_weeks)].groupby("roster_id")["points_for"].sum().reset_index(name="recent_pts")
 
     pr = recs.merge(recent, on="roster_id", how="left")
@@ -1048,61 +775,44 @@ elif view == "⚡ Power Rankings":
         "owner_name": "Owner", "team_name": "Team", "record": "Record",
         "points_for": "PF", "recent_pts": "Last-3 PF", "power_score": "Power",
     })
-    show["PF"]        = show["PF"].round(1)
-    show["Last-3 PF"] = show["Last-3 PF"].round(1)
-    show["Power"]     = show["Power"].round(1)
+    for c in ["PF", "Last-3 PF", "Power"]:
+        show[c] = show[c].round(1)
     st.dataframe(show, use_container_width=True, hide_index=True)
 
     fig = px.bar(pr, x="power_score", y="owner_name", orientation="h",
-                 color="power_score", color_continuous_scale=[[0, RZR_BLACK], [1, RZR_RED]],
+                 color="power_score", color_continuous_scale=[[0, MUTED], [1, ACCENT]],
                  labels={"power_score": "Power", "owner_name": ""})
     fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=440,
                       margin=dict(t=20, b=20), **PLOTLY_LAYOUT)
     st.plotly_chart(fig, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VIEW 9 — LUCK INDEX
+# VIEW 7 — LUCK INDEX
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "🍀 Luck Index":
     st.title("Luck Index")
-    st.caption("Expected wins = each week, fraction of league you'd beat with your score. Luck = Actual − Expected.")
+    st.caption("Expected wins = each week, the fraction of the league you'd beat with your score. Luck = Actual − Expected.")
 
-    season_options = sorted(leagues_df["season"].unique(), reverse=True)
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        sel_season = st.selectbox("Season", season_options)
-    with col2:
-        s_leagues = leagues_df[(leagues_df["season"] == sel_season)
-                               & (leagues_df["league_id"].isin(filter_league_ids))]
-        if s_leagues.empty:
-            st.warning("No leagues match filter.")
-            st.stop()
-        lname_map = dict(zip(s_leagues["name"], s_leagues["league_id"]))
-        sel_lg_name = st.selectbox("League", list(lname_map.keys()))
-    sel_lg = lname_map[sel_lg_name]
+    sel_season = st.selectbox("Season", SEASONS)
+    sel_lg = season_to_league_id(sel_season)
 
-    reg = matchups_df[
-        (matchups_df["league_id"] == sel_lg) & (matchups_df["season"] == sel_season)
-        & (matchups_df["is_playoff"] == 0)
-    ].copy()
+    reg = matchups_df[(matchups_df["league_id"] == sel_lg)
+                      & (matchups_df["season"] == sel_season)
+                      & (matchups_df["is_playoff"] == 0)].copy()
 
     if reg.empty:
-        st.warning("No matchup data.")
+        st.warning("No matchup data for this season.")
         st.stop()
 
-    # Expected wins per week: rank-1 / (n-1)
-    def week_expected(group):
-        n = len(group)
+    # Expected wins per week via all-play rank
+    reg["exp_win"] = 0.0
+    for wk, grp in reg.groupby("week"):
+        n = len(grp)
         if n < 2:
-            group["exp_win"] = 0
-            return group
-        ranks = group["points_for"].rank(method="min", ascending=True) - 1
-        group["exp_win"] = ranks / (n - 1)
-        return group
+            continue
+        ranks = grp["points_for"].rank(method="min", ascending=True) - 1
+        reg.loc[grp.index, "exp_win"] = ranks / (n - 1)
 
-    reg = reg.groupby("week", group_keys=False).apply(week_expected)
-
-    # Actual wins (via matchup_id pairing)
     paired = reg.merge(
         reg[["week", "matchup_id", "roster_id", "points_for"]],
         on=["week", "matchup_id"], suffixes=("", "_opp"),
@@ -1116,89 +826,90 @@ elif view == "🍀 Luck Index":
         pf=("points_for", "sum"),
     ).reset_index()
     agg["luck"] = agg["actual"] - agg["expected"]
-    agg = agg.merge(teams_df[["league_id", "roster_id", "owner_name", "team_name"]],
-                    on="roster_id", how="left")
-    agg = agg[agg["league_id"] == sel_lg].sort_values("luck", ascending=False).reset_index(drop=True)
+    agg = agg.merge(
+        teams_df[teams_df["league_id"] == sel_lg][["roster_id", "owner_name", "team_name"]],
+        on="roster_id", how="left",
+    ).sort_values("luck", ascending=False).reset_index(drop=True)
+
+    if agg.empty:
+        st.warning("Could not compute luck for this season.")
+        st.stop()
 
     show = agg[["owner_name", "team_name", "actual", "expected", "luck", "pf"]].rename(columns={
         "owner_name": "Owner", "team_name": "Team",
         "actual": "Actual W", "expected": "Expected W", "luck": "Luck", "pf": "PF",
     })
-    show["Expected W"] = show["Expected W"].round(2)
-    show["Luck"]       = show["Luck"].round(2)
+    show["Expected W"] = show["Expected W"].round(1)
+    show["Luck"]       = show["Luck"].round(1)
     show["PF"]         = show["PF"].round(1)
     st.dataframe(show, use_container_width=True, hide_index=True)
 
     fig = px.bar(agg, x="luck", y="owner_name", orientation="h",
-                 color="luck", color_continuous_scale=[[0, RZR_BLACK], [0.5, RZR_GRAY], [1, RZR_RED]],
+                 color="luck", color_continuous_scale=[[0, NEGATIVE], [0.5, MUTED], [1, POSITIVE]],
                  labels={"luck": "Luck (Actual − Expected W)", "owner_name": ""})
     fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=440,
                       margin=dict(t=20, b=20), **PLOTLY_LAYOUT)
     st.plotly_chart(fig, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VIEW 10 — DRAFT GRADES / ROI
+# VIEW 8 — DRAFT GRADES / ROI
 # ══════════════════════════════════════════════════════════════════════════════
 elif view == "📝 Draft Grades / ROI":
     st.title("Draft Grades / ROI")
-    st.caption("Draft roster reconstructed from Week 1 starting + bench slots (minus players added via transactions). "
-               "ROI = season PPR points scored by those players while rostered.")
+    st.caption("Draft roster proxied from earliest available week's roster. ROI = season PPR points for those players.")
 
-    season_options = sorted(leagues_df["season"].unique(), reverse=True)
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        sel_season = st.selectbox("Season", season_options)
-    with col2:
-        s_leagues = leagues_df[(leagues_df["season"] == sel_season)
-                               & (leagues_df["league_id"].isin(filter_league_ids))]
-        if s_leagues.empty:
-            st.warning("No leagues match filter.")
-            st.stop()
-        lname_map = dict(zip(s_leagues["name"], s_leagues["league_id"]))
-        sel_lg_name = st.selectbox("League", list(lname_map.keys()))
-    sel_lg = lname_map[sel_lg_name]
+    sel_season = st.selectbox("Season", SEASONS)
+    sel_lg = season_to_league_id(sel_season)
 
-    slots_df = load_roster_slots(conn, sel_season)
+    slots_df = load_roster_slots_season(conn, sel_season)
+    slots_df = slots_df[slots_df["league_id"] == sel_lg]
     stats_df = load_player_stats(conn)
 
-    week1 = slots_df[(slots_df["league_id"] == sel_lg) & (slots_df["week"] == 1)].copy()
-    if week1.empty:
-        st.warning("No Week 1 roster data — cannot proxy draft.")
+    if slots_df.empty:
+        st.warning("No roster slot data for this season.")
         st.stop()
 
-    # Subtract players acquired before week 1 isn't really possible without draft data;
-    # treat the full Week 1 roster as the drafted roster.
+    earliest_week = int(slots_df["week"].min())
+    st.caption(f"Using Week {earliest_week} rosters as draft proxy.")
+    week1 = slots_df[slots_df["week"] == earliest_week].copy()
+
     season_pts = (
         stats_df[stats_df["season"] == sel_season]
-        .groupby("player_id")
-        .agg(season_pts=("pts_ppr", "sum"))
-        .reset_index()
+        .groupby("player_id").agg(season_pts=("pts_ppr", "sum")).reset_index()
     )
 
-    merged = week1.merge(players_df, on="player_id", how="left") \
-                  .merge(season_pts, on="player_id", how="left") \
-                  .merge(teams_df[["league_id", "roster_id", "owner_name"]], on=["league_id", "roster_id"], how="left")
+    merged = (week1
+              .merge(players_df, on="player_id", how="left")
+              .merge(season_pts, on="player_id", how="left")
+              .merge(teams_df[["league_id", "roster_id", "owner_name"]],
+                     on=["league_id", "roster_id"], how="left"))
     merged["season_pts"] = merged["season_pts"].fillna(0)
 
-    # Per-owner totals
+    if merged["owner_name"].isna().all():
+        st.warning("Could not join rosters to owners.")
+        st.stop()
+
     owner_totals = merged.groupby("owner_name").agg(
         draft_pts=("season_pts", "sum"),
         players=("player_id", "nunique"),
     ).reset_index().sort_values("draft_pts", ascending=False)
+
     avg = owner_totals["draft_pts"].mean() or 1
-    owner_totals["Grade"] = owner_totals["draft_pts"].apply(lambda p: (
-        "A" if p > avg * 1.15 else
-        "B" if p > avg * 1.05 else
-        "C" if p > avg * 0.95 else
-        "D" if p > avg * 0.85 else "F"
-    ))
+    def grade(p):
+        if p > avg * 1.15: return "A"
+        if p > avg * 1.05: return "B"
+        if p > avg * 0.95: return "C"
+        if p > avg * 0.85: return "D"
+        return "F"
+    owner_totals["Grade"] = owner_totals["draft_pts"].apply(grade)
     owner_totals = owner_totals.rename(columns={"owner_name": "Owner", "draft_pts": "Draft PPR", "players": "Players"})
     owner_totals["Draft PPR"] = owner_totals["Draft PPR"].round(1)
+
     st.subheader("Owner Draft Grades")
     st.dataframe(owner_totals, use_container_width=True, hide_index=True)
 
     fig = px.bar(owner_totals, x="Draft PPR", y="Owner", orientation="h", color="Grade",
-                 color_discrete_map={"A": RZR_RED, "B": RZR_RED_LT, "C": RZR_GRAY, "D": "#7A1A26", "F": RZR_BLACK})
+                 color_discrete_map={"A": POSITIVE, "B": ACCENT, "C": MUTED, "D": ACCENT_2, "F": NEGATIVE})
     fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=420,
                       margin=dict(t=20, b=20), **PLOTLY_LAYOUT)
     st.plotly_chart(fig, use_container_width=True)
